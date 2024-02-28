@@ -1,104 +1,191 @@
-import { ConnectWallet } from "@thirdweb-dev/react";
-import styles from "../styles/Home.module.css";
-import Image from "next/image";
-import { NextPage } from "next";
+import Head from "next/head";
+import { Inter } from "next/font/google";
+import Navbar from "../components/NavBar";
+import {
+  Box,
+  Button,
+  Flex,
+  HStack,
+  Input,
+  Spinner,
+  useToast,
+} from "@chakra-ui/react";
+import { ACTIVE_CHAIN, KLAYSWAP_TEST_ADDRESS, sKAI_TOKEN_ADDRESS } from "../const/details";
+import {
+  ConnectWallet,
+  toWei,
+  useAddress,
+  useBalance,
+  useContract,
+  useContractMetadata,
+  useContractRead,
+  useContractWrite,
+  useNetworkMismatch,
+  useSDK,
+  useSwitchChain,
+  useTokenBalance,
+} from "@thirdweb-dev/react";
+import { useState } from "react";
+import SwapInput from "../components/SwapInput";
 
-const Home: NextPage = () => {
-  return (
-    <main className={styles.main}>
-      <div className={styles.container}>
-        <div className={styles.header}>
-          <h1 className={styles.title}>
-            Welcome to{" "}
-            <span className={styles.gradientText0}>
-              <a
-                href="https://thirdweb.com/"
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                thirdweb.
-              </a>
-            </span>
-          </h1>
+const inter = Inter({ subsets: ["latin"] });
 
-          <p className={styles.description}>
-            Get started by configuring your desired network in{" "}
-            <code className={styles.code}>src/index.js</code>, then modify the{" "}
-            <code className={styles.code}>src/App.js</code> file!
-          </p>
+export default function Home() {
 
-          <div className={styles.connect}>
-            <ConnectWallet />
-          </div>
-        </div>
+  const toast = useToast();
+  const address = useAddress();
+  const { contract: sKaitokenContract } = useContract(sKAI_TOKEN_ADDRESS, "token");
+  const { contract: dexContract } = useContract(KLAYSWAP_TEST_ADDRESS, "custom");
+  const { data: symbol } = useContractRead(sKaitokenContract, "symbol");
+  const { data: tokenMetadata } = useContractMetadata(sKaitokenContract);
+  const { data: sKaiTokenBalance } = useTokenBalance(sKaitokenContract, address);
+  const { data: nativeBalance } = useBalance();
 
-        <div className={styles.grid}>
-          <a
-            href="https://portal.thirdweb.com/"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              src="/images/portal-preview.png"
-              alt="Placeholder preview of starter"
-              width={300}
-              height={200}
-            />
-            <div className={styles.cardText}>
-              <h2 className={styles.gradientText1}>Portal ➜</h2>
-              <p>
-                Guides, references, and resources that will help you build with
-                thirdweb.
-              </p>
-            </div>
-          </a>
 
-          <a
-            href="https://thirdweb.com/dashboard"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              src="/images/dashboard-preview.png"
-              alt="Placeholder preview of starter"
-              width={300}
-              height={200}
-            />
-            <div className={styles.cardText}>
-              <h2 className={styles.gradientText2}>Dashboard ➜</h2>
-              <p>
-                Deploy, configure, and manage your smart contracts from the
-                dashboard.
-              </p>
-            </div>
-          </a>
+  const isMismatched = useNetworkMismatch();
+  const switchChain = useSwitchChain();
 
-          <a
-            href="https://thirdweb.com/templates"
-            className={styles.card}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              src="/images/templates-preview.png"
-              alt="Placeholder preview of templates"
-              width={300}
-              height={200}
-            />
-            <div className={styles.cardText}>
-              <h2 className={styles.gradientText3}>Templates ➜</h2>
-              <p>
-                Discover and clone template projects showcasing thirdweb
-                features.
-              </p>
-            </div>
-          </a>
-        </div>
-      </div>
-    </main>
+  const sdk = useSDK();
+
+  const [nativeValue, setNativeValue] = useState<string>("0");
+  const [tokenValue, setTokenValue] = useState<string>("0");
+  const [currentFrom, setCurrentFrom] = useState<string>("native");
+  const [loading, setLoading] = useState<boolean>(false);
+
+  const { mutateAsync: swapNativeToToken } = useContractWrite(
+    dexContract,
+    "swapExactKLAYForTokens"
   );
-};
+  const { mutateAsync: swapTokenToNative } = useContractWrite(
+    dexContract,
+    "swapExactTokensForKLAY"
+  );
+  const { mutateAsync: approveTokenSpending } = useContractWrite(
+    sKaitokenContract,
+    "approve"
+  );
 
-export default Home;
+  const executeSwap = async () => {
+    setLoading(true);
+    if (isMismatched) {
+      switchChain(ACTIVE_CHAIN.chainId);
+      setLoading(false);
+      return;
+    }
+    try {
+      if (currentFrom === "native") {
+        await swapNativeToToken({ overrides: { value: toWei(nativeValue) } });
+        toast({
+          status: "success",
+          title: "Swap Successful",
+          description: `You have successfully swapped your ${
+            ACTIVE_CHAIN.nativeCurrency.symbol
+          } to ${symbol || "tokens"}.`,
+        });
+      } else {
+        // Approve token spending
+        await approveTokenSpending({ args: [KLAYSWAP_TEST_ADDRESS, toWei(tokenValue)] });
+        // Swap!
+        await swapTokenToNative({ args: [toWei(tokenValue)] });
+        toast({
+          status: "success",
+          title: "Swap Successful",
+          description: `You have successfully swapped your ${
+            symbol || "tokens"
+          } to ${ACTIVE_CHAIN.nativeCurrency.symbol}.`,
+        });
+      }
+      setLoading(false);
+    } catch (err) {
+      console.error(err);
+      toast({
+        status: "error",
+        title: "Swap Failed",
+        description:
+          "There was an error performing the swap. Please try again.",
+      });
+      setLoading(false);
+    }
+  };
+
+  return (
+    <>
+      <Head>
+        <title>Decentralised Exchange</title>
+        <meta name="description" content="Generated by create next app" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <link rel="icon" href="/favicon.ico" />
+      </Head>
+
+      <Navbar />
+
+      <Flex
+        direction="column"
+        gap="5"
+        mt="40"
+        p="5"
+        mx="auto"
+        maxW={{ base: "sm", md: "xl" }}
+        w="full"
+        rounded="2xl"
+        borderWidth="1px"
+        borderColor="gray.300"
+      >
+        <Flex
+          direction={currentFrom === "native" ? "column" : "column-reverse"}
+          gap="3"
+        >
+          <SwapInput
+            current={currentFrom}
+            type="native"
+            max={nativeBalance?.displayValue}
+            value={nativeValue}
+            setValue={setNativeValue}
+            tokenSymbol="KLAY"
+            tokenBalance={nativeBalance?.displayValue || "0"}
+          />
+
+          <Button
+            onClick={() =>
+              currentFrom === "native"
+                ? setCurrentFrom("token")
+                : setCurrentFrom("native")
+            }
+            maxW="5"
+            mx="auto"
+          >
+            ↓
+          </Button>
+
+          <SwapInput
+            current={currentFrom}
+            type="token"
+            max={sKaiTokenBalance?.displayValue}
+            value={tokenValue}
+            setValue={setTokenValue}
+            tokenSymbol={tokenMetadata?.symbol}
+            tokenBalance={sKaiTokenBalance?.displayValue || "0"}
+            />
+        </Flex>
+
+        {address ? (
+          <Button
+            onClick={executeSwap}
+            py="7"
+            fontSize="2xl"
+            colorScheme="twitter"
+            rounded="xl"
+            isDisabled={loading}
+          >
+            {loading ? <Spinner /> : "Execute Swap"}
+          </Button>
+        ) : (
+          <ConnectWallet
+            style={{ padding: "20px 0px", fontSize: "18px" }}
+            theme="light"
+          />
+        )}
+      </Flex>
+    </>
+  );
+}
